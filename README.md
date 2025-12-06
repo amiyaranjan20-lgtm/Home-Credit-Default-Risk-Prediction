@@ -105,7 +105,7 @@ This repository documents the work I carried out individually for the project, i
 
 - Complete data exploration, cleaning, and feature engineering  
 - A full preprocessing system using `recipes`  
-- Implementation and evaluation of four different ML models  
+- Implementation and evaluation of different ML models  
 - Development of consistent evaluation tools (AUC, ROC, confusion matrices, threshold analysis)  
 - The full pipeline for generating a Kaggle-ready submission file  
 
