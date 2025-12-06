@@ -1,0 +1,1019 @@
+---
+title: " Capstope Project-Home_Credit_Default_Risk_Prediction"
+author: "Amiya Ranjan Sahoo"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    highlight: espresso
+    number_sections: true
+    toc: true
+editor_options:
+  chunk_output_type: inline
+---
+
+*Introduction:-*
+
+
+The Home Credit Default Risk project aims to develop a predictive model that assesses the likelihood of a loan applicant defaulting on repayment.
+Home Credit, a consumer-finance company, provides loans to clients with limited or no credit history.
+By accurately predicting default probability, the company can reduce financial risk while maintaining loan accessibility for underbanked populations.
+
+The original dataset contains over 600,000 client records across multiple linked tables (application, credit history, bureau, and payment data).
+After extensive preprocessing—handling missing values, removing anomalies, and normalizing features—the cleaned training dataset comprises approximately 307,000 clients, each described by demographic, financial, and behavioral attributes.
+The target variable TARGET indicates whether a client repaid (0) or defaulted (1) on their loan.
+
+This analysis follows the full CRISP-DM process—data understanding, preparation, modeling, and evaluation—with emphasis on predictive modeling.
+After comprehensive data cleaning and feature engineering, multiple algorithms are compared:
+	•	Model 1: Penalized Logistic Regression (glmnet)
+	•	Model 2: Decision Tree (CART)
+	•	Model 3: Random Forest (ranger)
+	•	Model 4: Gradient Boosting (XGBoost)
+	
+
+Model performance is evaluated on a stratified 70 / 30 train–validation split using 5-fold cross-validation.
+Metrics include AUC, Accuracy, Precision, Recall, and F1 Score.
+The ultimate objective is to identify the model that not only outperforms the majority-class benchmark (~92 % accuracy but no discrimination) but also provides stable, interpretable predictions that can support risk-aware lending decisions.
+
+
+# .Code Chunk 1 — Load Required Libraries
+
+
+This code chunk loads all the R packages required for data exploration, preprocessing, visualization, and modeling.
+It includes libraries for data manipulation (dplyr, data.table, tidyr), visualization (ggplot2, GGally), data cleaning (janitor, skimr), and machine learning (caret, tidymodels, ranger, xgboost).
+Loading these libraries at the beginning ensures all necessary functions are available for the entire analysis workflow—from exploratory data analysis (EDA) to model evaluation.
+
+```{r Library loading}
+knitr::opts_chunk$set(echo = TRUE)
+
+## ---- load-libraries ----
+# Core modeling workflow per Kuhn & Johnson
+library(tidyverse)     # data manipulation and ggplot2
+library(caret)         # data preprocessing and resampling
+library(recipes)       # feature engineering pipeline
+library(data.table)    # fast I/O for large CSVs
+library(skimr)         # quick summaries
+library(janitor)       # clean column names
+library(gt)            # table display
+library(GGally)        # correlation and pair plots
+library(ggplot2)       # visualization
+library(forcats)       # factor handling
+library(rpart.plot)
+
+set.seed(123)          # reproducibility
+
+
+```
+
+
+
+# .Code Chunk 2 — Load and Inspect the Training Dataset
+
+This code chunk imports the main training dataset (application_train.csv) using fread() for fast and efficient loading, then standardizes column names with clean_names().
+It provides an initial overview of the dataset through structure, dimensions, and a preview of the first few rows.
+Basic summary statistics and data types are examined to understand the variable composition and detect any immediate data quality issues before preprocessing.
+
+```{r}
+
+## ---- load-data ----
+# Use fread() for efficiency
+app_train <- fread("application_train.csv") |> clean_names()
+
+# Basic structure check
+dim(app_train)
+str(app_train[, 1:10])
+gt(as.data.frame(head(app_train, 10)))
+
+# Quick summary per Kuhn & Johnson step 1: "Understand data characteristics"
+skim(app_train)
+
+```
+
+
+
+
+
+# .Code Chunk 3 — Basic hygiene and anomaly fixes
+
+
+What this does
+	•	Validates core columns exist. Fail fast if not.
+	•	Encodes target as a factor for classification.
+	•	Replaces the sentinel 365243 in days_employed with NA. This is a documented anomaly.
+	•	Creates leak-safe features: age_years from days_birth, emp_years from days_employed. These are standard transforms used in the book’s preprocessing stage.
+
+```{r}
+
+## ---- clean-basics ----
+# prerequisites: app_train from previous chunk, names are snake_case
+
+# 1) assert required columns exist
+stopifnot(all(c("sk_id_curr","target","days_birth","days_employed") %in% names(app_train)))
+
+# 2) target to 2-level factor (0 = Repaid, 1 = Default)
+app_train <- app_train |>
+  dplyr::mutate(target = factor(target, levels = c(0,1)))
+
+# 3) fix known sentinel in days_employed (365243 means "missing")
+app_train <- app_train |>
+  dplyr::mutate(days_employed = dplyr::na_if(days_employed, 365243))
+
+# 4) safe human-readable derivatives (no leakage)
+app_train <- app_train |>
+  dplyr::mutate(
+    age_years = -days_birth/365.25,
+    emp_years = dplyr::if_else(!is.na(days_employed), -days_employed/365.25, NA_real_)
+  )
+
+```
+
+
+
+
+## .Check structure and summary of key columns and Inspect missing values and a few rows 
+
+
+
+```{r}
+str(app_train[, c("target", "days_birth", "days_employed", "age_years", "emp_years")])
+
+summary(app_train[, .(days_employed, age_years, emp_years)])
+head(app_train[, .(sk_id_curr, target, age_years, emp_years)])
+
+
+```
+
+
+# .Code Chunk 4 — Missingness scan and prune high-NA columns
+
+
+What it does
+	•	Quantifies missingness per variable.
+	•	Drops columns with ≥80% NA to reduce noise and leakage risk.
+	•	Preserves sparse but useful scores (ext_source_1, ext_source_3) if they exist.
+
+How to check
+	•	head(miss_pct, 25) shows the worst offenders.
+	•	length(drop_cols) shows count to be removed.
+	•	Final line should return character(0).
+	
+	
+
+```{r}
+
+## ---- missing-scan ----
+library(dplyr)
+
+# percent NA per column
+miss_pct <- sapply(app_train, function(x) mean(is.na(x))) |> sort(decreasing = TRUE)
+
+# inspect top 25
+head(miss_pct, 25)
+
+# drop columns with ≥ 80% NA, except keep key sparse predictors if present
+keep_anyway <- intersect(names(app_train), c("ext_source_1","ext_source_3"))
+high_na <- names(miss_pct[miss_pct >= 0.80])
+drop_cols <- setdiff(high_na, keep_anyway)
+
+length(drop_cols)      # how many to drop
+drop_cols[1:20]        # preview names
+
+app_train <- app_train |> select(-all_of(drop_cols))
+
+# sanity: confirm removed
+intersect(names(app_train), drop_cols)  # should be character(0)
+
+```
+
+
+
+# .Code Chunk 5 — Build the preprocessing recipe
+
+
+What it does
+	•	Excludes sk_id_curr from modeling if present.
+	•	Removes zero/near-zero variance columns.
+	•	Imputes numerics by median and factors by mode.
+	•	Groups rare factor levels into .rare to stabilize.
+	•	One-hot encodes factors.
+	•	Fixes skew with Yeo–Johnson, then centers and scales numerics.
+	•	Drops highly correlated numerics (>|0.90|).
+	
+	
+
+```{r}
+
+## ---- recipe-prep ----
+library(recipes); library(caret)
+
+# target must be factor already (done earlier)
+stopifnot(is.factor(app_train$target))
+
+# mark ID so it’s excluded from predictors
+has_id <- "sk_id_curr" %in% names(app_train)
+
+rec <- recipe(target ~ ., data = app_train) %>%
+  { if (has_id) update_role(., sk_id_curr, new_role = "ID") else . } %>%
+  step_zv(all_predictors()) %>%
+  step_nzv(all_predictors()) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_other(all_nominal_predictors(), threshold = 0.01, other = ".rare") %>%
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  step_YeoJohnson(all_numeric_predictors()) %>%
+  step_center(all_numeric_predictors()) %>%
+  step_scale(all_numeric_predictors()) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.90)
+
+rec_prep   <- prep(rec, training = app_train, verbose = TRUE)
+train_clean <- bake(rec_prep, new_data = NULL)
+# drop ID column before modeling
+train_clean <- dplyr::select(train_clean, -sk_id_curr)
+
+dim(train_clean)
+```
+
+
+## .Checking the structure of the variables
+
+This code chunk examines the internal structure of the dataset to understand variable types, numeric ranges, and factor levels.
+It summarizes key numeric and categorical columns to identify potential anomalies or irregularities.
+Additionally, it checks for missing values across variables and previews a few rows of data to get a sense of overall data quality and completeness before cleaning and transformation.
+
+```{r}
+# columns and types look model-ready
+str(train_clean[ , 1:20])
+sum(is.na(train_clean))              # should be 0
+table(train_clean$target)            # factor with 2 levels
+"sk_id_curr" %in% names(train_clean)
+
+```
+
+
+
+## .ID is stored in a separate vector if we want to map predictions back:
+
+```{r}
+ids <- app_train$sk_id_curr
+```
+
+
+
+# .Code Chunk 6 — Save preprocessing artifacts
+
+What it does
+	•	Persists the fitted recipe and the cleansed matrix.
+	•	Lets you reload the exact preprocessing later.
+
+```{r}
+
+## ---- save-artifacts ----
+saveRDS(rec_prep, "rec_prepared.rds")
+data.table::fwrite(train_clean, "train_clean.csv")
+
+file.info("rec_prepared.rds")[, c("size","mtime")]
+file.info("train_clean.csv")[, c("size","mtime")]
+
+```
+
+## .Code Chunk — Inspect the cleaned dataset
+
+This code chunk reviews the dataset after all preprocessing and transformation steps have been applied.
+It verifies that missing values, outliers, and redundant variables have been addressed, and that all predictors are in the correct numeric or factor format.
+The goal is to confirm that the cleaned dataset is ready for modeling, with consistent structure and no data integrity issues.
+
+```{r}
+## ---- inspect-cleaned ----
+library(skimr)
+library(gt)
+
+# 1. Dimensions
+dim(train_clean)
+
+# 2. Structure of first few columns
+str(train_clean[, 1:20])
+
+# 3. Summary of numeric variables
+summary(train_clean)
+
+# 4. Quick profile (types, missingness, stats)
+skim(train_clean)
+
+# 5. Display first 10 rows as table
+gt(as.data.frame(head(train_clean, 10)))
+
+# 6. Confirm target distribution
+table(train_clean$target)
+prop.table(table(train_clean$target))
+
+# 7. Write the cleaned Dataset into local Directory
+
+write.csv(train_clean, "train_clean.csv", row.names = FALSE)
+
+```
+
+
+
+
+
+# . Code Chunk 6-Sanity check
+
+This code chunk performs a final validation step to confirm data integrity after preprocessing.
+It checks that no missing values remain in the cleaned dataset across all variables.
+Ensuring a complete dataset at this stage is critical, as missing values can lead to biased estimates or model training errors in subsequent predictive modeling steps.
+
+## . 	1.	Verify there are no missing values anywhere.
+
+```{r}
+sum(is.na(train_clean))
+```
+
+
+## . 2. Check for any constant or zero-variance columns that slipped through.
+```{r}
+nzv <- caret::nearZeroVar(train_clean, saveMetrics = TRUE)
+head(nzv[nzv$nzv == TRUE, ],127)
+```
+
+
+# . Code Chunk 7 Data Partition — 70/30 stratified split
+
+Purpose
+	•	Ensures both training and validation sets are randomly sampled yet keep the same proportion of defaulters (~8%) and repaid cases (~92%).
+	•	This stratified sampling prevents bias and maintains target distribution consistency.
+
+*We split the training dataset into a 70:30 ratio to validate the model’s performance on the training data. After confirming that the model performs satisfactorily, we will retrain it using the entire training dataset and then evaluate its accuracy on the separate test dataset provided by Kaggle.*
+
+If output shows approximately 215k rows in training and 92k in validation, with matching class ratios, your split is successful.
+
+
+Interpretation:
+	•	Training set: 215,259 rows.
+	•	Validation set: 92,252 rows.
+	•	Class proportions (≈ 8.07 % Default / 91.93 % Repaid) are identical across full, train, and validation samples.
+	•	Data is balanced correctly for stratified modeling.
+	
+
+```{r}
+
+## ---- split-70-30 ----
+library(caret)
+
+# Convert target to factor (positive = "Default")
+train_clean$target <- factor(ifelse(train_clean$target == 1, "Default", "Repaid"),
+                             levels = c("Default","Repaid"))
+
+# Create a 70/30 stratified split to preserve class balance
+set.seed(123)
+idx <- createDataPartition(train_clean$target, p = 0.70, list = FALSE)
+
+trn <- train_clean[idx, ]   # training subset (70%)
+val <- train_clean[-idx, ]  # validation subset (30%)
+
+# Check structure and class proportions
+dim(trn); dim(val)
+prop.table(table(train_clean$target))
+prop.table(table(trn$target))
+prop.table(table(val$target))
+
+```
+
+
+# . Code CHunk -8 Benchmark majority classifier
+
+Computes the majority-class baseline. Predicts all as “Repaid,” then reports Accuracy, Precision, Recall, F1, and AUC=0.5. Establishes the must-beat benchmark.
+
+```{r}
+## ---- benchmark-majority ----
+# Always predict "Repaid" on validation
+bench_pred <- factor(rep("Repaid", nrow(val)), levels = c("Default","Repaid"))
+bench_cm   <- caret::confusionMatrix(bench_pred, val$target, positive = "Default")
+
+knitr::kable(data.frame(
+  Metric = c("Accuracy","Precision","Recall","Specificity","F1","AUC"),
+  Value  = c(
+    bench_cm$overall["Accuracy"],
+    bench_cm$byClass["Precision"],
+    bench_cm$byClass["Sensitivity"],
+    bench_cm$byClass["Specificity"],
+    bench_cm$byClass["F1"],
+    0.5  # random ranking baseline
+  )
+), digits = 4, caption = "Benchmark — Majority Class (predict all Repaid)")
+
+```
+
+
+## . metrics-helper
+
+Defines reusable evaluators. Given predicted probabilities and truth, it computes ROC/AUC, confusion matrices at 0.50 and Youden thresholds, and formats metric tables.
+
+```{r}
+## ---- metrics-helper ----
+library(pROC); library(caret); library(knitr)
+
+eval_probs <- function(p, truth, thresh = 0.50) {
+  roc_obj <- roc(truth, p, levels = c("Repaid","Default"))
+  auc_val <- as.numeric(auc(roc_obj))
+  # fixed threshold
+  yhat <- factor(ifelse(p >= thresh, "Default","Repaid"), levels = c("Default","Repaid"))
+  cm   <- confusionMatrix(yhat, truth, positive = "Default")
+  # Youden threshold
+  t_opt <- as.numeric(coords(roc_obj, "best", best.method = "youden", ret = "threshold"))
+  yopt  <- factor(ifelse(p >= t_opt, "Default","Repaid"), levels = c("Default","Repaid"))
+  cm2   <- confusionMatrix(yopt, truth, positive = "Default")
+
+  list(
+    auc = auc_val, t_opt = t_opt, roc = roc_obj,
+    fixed = cm, optimal = cm2
+  )
+}
+
+print_metrics <- function(tag, res) {
+  kable(data.frame(
+    Metric = c("AUC","Threshold","Accuracy","Precision","Recall","Specificity","F1"),
+    `@0.50` = c(
+      sprintf("%.4f", res$auc),
+      "0.50",
+      sprintf("%.4f", res$fixed$overall["Accuracy"]),
+      sprintf("%.4f", res$fixed$byClass["Precision"]),
+      sprintf("%.4f", res$fixed$byClass["Sensitivity"]),
+      sprintf("%.4f", res$fixed$byClass["Specificity"]),
+      sprintf("%.4f", res$fixed$byClass["F1"])
+    ),
+    `@Youden` = c(
+      sprintf("%.4f", res$auc),
+      sprintf("%.3f", res$t_opt),
+      sprintf("%.4f", res$optimal$overall["Accuracy"]),
+      sprintf("%.4f", res$optimal$byClass["Precision"]),
+      sprintf("%.4f", res$optimal$byClass["Sensitivity"]),
+      sprintf("%.4f", res$optimal$byClass["Specificity"]),
+      sprintf("%.4f", res$optimal$byClass["F1"])
+    )
+  ), align = "lcc", caption = paste(tag, "— Metrics Summary"))
+}
+```
+
+
+
+
+# . Model 1 — Penalized Logistic Regression (glmnet)
+
+Purpose
+	•	Fits a regularized logistic regression using both L1 (lasso) and L2 (ridge) penalties.
+	•	Performs internal 5-fold CV to pick the best penalty strength (lambda) and mixing parameter (alpha) that maximize AUC.
+	•	Provides interpretable coefficients and a strong baseline.
+
+```{r}
+## ---- model1-glmnet-train ----
+library(caret)
+library(glmnet)
+
+# Cross-validation setup
+ctrl <- trainControl(
+  method = "cv", number = 5,              # 5-fold CV
+  classProbs = TRUE,                      # compute probabilities
+  summaryFunction = twoClassSummary,      # use ROC metric
+  savePredictions = "final"
+)
+
+# Train penalized logistic regression (elastic-net)
+set.seed(123)
+m_glmnet <- caret::train(
+  target ~ ., data = trn,
+  method = "glmnet",
+  trControl = ctrl,
+  metric = "ROC",                         # maximize AUC
+  tuneLength = 10                         # search grid of alpha / lambda
+)
+
+# View cross-validation results
+m_glmnet
+plot(m_glmnet)
+```
+
+
+## . Code Chunk — Validate Model
+
+Purpose
+	•	Tests the model on unseen validation data.
+	•	Calculates ROC AUC, the main metric for credit-risk models.
+	•	Plots ROC curve to visualize discrimination ability.
+	
+	
+	output:-
+	
+Model 1 — Penalized Logistic Regression (glmnet) Performance Summary
+
+| Metric                 | Value        | Interpretation                                                                                |
+|:------------------------|:-------------|:----------------------------------------------------------------------------------------------|
+| Validation AUC          | ≈ 0.739      | Moderate–strong discrimination. In credit-risk modeling, any AUC between 0.70–0.80 is considered a good baseline. |
+| Cross-validated AUC     | ≈ 0.742      | Consistent with validation. Indicates stable performance and minimal overfitting.             |
+| Sensitivity / Specificity | ≈ 0.004 / 0.999 | Default cases rare. Low recall due to imbalance, which is normal before re-weighting or re-sampling. |
+
+
+	•	Logistic (even penalized) models capture linear effects only.
+	•	The dataset has nonlinear, interaction-heavy patterns (age × income × credit etc.).
+	•	Tree-based and boosting models (next steps) usually raise AUC to 0.77–0.82 on this data.
+
+So:
+	•	glmnet is solid as a baseline — interpretable and well-behaved.
+	•	Expect stronger performance from Random Forest and Gradient Boosting.
+
+```{r}
+## ---- model1-glmnet-validate ----
+library(pROC)
+
+# Predict default probabilities on validation data
+pred_val <- predict(m_glmnet, newdata = val, type = "prob")[, "Default"]
+
+# Compute ROC and AUC
+roc_obj <- roc(response = val$target, predictor = pred_val, levels = c("Repaid","Default"))
+auc(roc_obj)
+plot(roc_obj, col = "steelblue", main = "ROC Curve — Model 1: Penalized Logistic Regression")
+
+```
+
+## . glmnet-metrics
+
+Applies the evaluator to glmnet predictions. Prints confusion matrices and metric tables at 0.50 and Youden. Confirms threshold-dependent trade-offs.
+
+```{r}
+## ---- model1-glmnet-metrics ----
+res1 <- eval_probs(pred_val, val$target, thresh = 0.50)
+print_metrics("Model 1: Penalized Logistic (glmnet)", res1)
+# Optional confusion matrices:
+res1$fixed$table; res1$optimal$table
+```
+
+
+
+
+
+# . Model 2 — Decision Tree (CART)
+
+
+A single CART tree shows how features split borrowers into default vs repaid groups.
+This model is simple, interpretable, and forms the foundation for ensembles (Bagging, RF, GBM).
+
+##. Code Chunk — Train CART Model
+
+Purpose
+	•	Fits a CART model using Gini-based recursive partitioning.
+	•	Performs 5-fold CV to find the optimal complexity parameter cp.
+	•	Gives an interpretable tree with primary splits like EXT_SOURCE_2, DAYS_BIRTH, etc.
+
+```{r}
+## ---- model2-cart-train ----
+library(caret)
+library(rpart)
+library(rpart.plot)
+
+# 1. Cross-validation setup
+ctrl_cart <- trainControl(
+  method = "cv", number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+# 2. Train classification tree
+set.seed(123)
+m_cart <- caret::train(
+  target ~ ., data = trn,
+  method = "rpart",
+  trControl = ctrl_cart,
+  metric = "ROC",          # maximize AUC
+  tuneLength = 10
+)
+
+# 3. View model summary and plot complexity parameter (cp)
+m_cart
+plot(m_cart)
+```
+
+## . Code Chunk — Visualize Tree and Validate
+
+Purpose
+	•	Visualizes how the model splits the data.
+	•	Evaluates discrimination using AUC on validation data.
+
+
+Output 
+
+Table: Model 2 — Decision Tree (CART) Performance Summary
+
+| Metric                      | Value   | Interpretation                                                                 |
+|:-----------------------------|:--------|:------------------------------------------------------------------------------|
+| Cross-validated AUC          | ≈ 0.621 | Moderate discrimination; weaker than penalized logistic regression.           |
+| Validation AUC               | ≈ 0.592 | Confirms limited generalization—single tree underfits nonlinear relationships.|
+| Best Complexity Parameter (cp)| 0.000153| This cp value gave the highest cross-validated ROC performance.               |
+| Sensitivity / Specificity    | Low / High | Tree predicts mostly 'Repaid'; imbalance suppresses recall while keeping specificity high. |
+
+```{r}
+## ---- model2-cart-validate ----
+# Plot the best tree
+rpart.plot(m_cart$finalModel, type = 2, extra = 104, under = TRUE,
+           main = "Model 2 — Decision Tree (CART)")
+
+# Predict probabilities on validation data
+pred_cart <- predict(m_cart, newdata = val, type = "prob")[, "Default"]
+
+# ROC / AUC on validation set
+library(pROC)
+roc_cart <- roc(response = val$target, predictor = pred_cart, levels = c("Repaid","Default"))
+auc(roc_cart)
+plot(roc_cart, col = "darkorange", main = "ROC Curve — Model 2: Decision Tree (CART)")
+```
+
+## .cart-metrics
+Shows weaker AUC and recall. Useful as an interpretable baseline and as a foil to ensembles.
+
+```{r}
+## ---- model2-cart-metrics ----
+res2 <- eval_probs(pred_cart, val$target, thresh = 0.50)
+print_metrics("Model 2: Decision Tree (CART)", res2)
+res2$fixed$table; res2$optimal$table
+```
+
+
+
+# .Model 3 — Random Forest (ranger)
+
+
+## .Code Chunk — Train Random Forest
+
+Trains a weighted Random Forest with 5-fold cross-validation. Tunes mtry and min.node.size. Uses class weights to address imbalance. Evaluates on the validation set and reports ROC AUC. Outputs a concise summary table for inclusion in the report.
+
+```{r}
+## ---- model3-rf-train ----
+library(caret)
+library(ranger)
+
+# 1) CV setup
+ctrl_rf <- trainControl(
+  method = "cv", number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary,
+  savePredictions = "final"
+)
+
+# 2) Class weights (inverse frequency)
+tbl <- table(trn$target)
+w_default <- as.numeric(tbl["Repaid"])  / sum(tbl)  # weight minority higher
+w_repaid  <- as.numeric(tbl["Default"]) / sum(tbl)
+class_wts <- c("Default" = w_default, "Repaid" = w_repaid)
+
+# 3) Tune grid
+p <- ncol(trn) - 1
+tgrid <- expand.grid(
+  mtry = unique(pmax(1, round(c(sqrt(p)/2, sqrt(p), 2*sqrt(p))))),
+  splitrule = "gini",
+  min.node.size = c(5, 20)
+)
+
+# 4) Train
+set.seed(123)
+m_rf <- caret::train(
+  target ~ ., data = trn,
+  method = "ranger",
+  trControl = ctrl_rf,
+  metric = "ROC",
+  tuneGrid = tgrid,
+  importance = "impurity",
+  num.trees = 500,
+  class.weights = class_wts
+)
+
+m_rf
+plot(m_rf)
+```
+
+
+
+## .Code Chunk — Validate Random Forest
+
+Computes validation ROC AUC.
+```{r}
+## ---- model3-rf-validate ----
+library(pROC)
+
+pred_rf <- predict(m_rf, newdata = val, type = "prob")[, "Default"]
+roc_rf  <- roc(response = val$target, predictor = pred_rf, levels = c("Repaid","Default"))
+auc_rf  <- auc(roc_rf)
+auc_rf
+plot(roc_rf, col = "darkgreen", main = "ROC — Model 3: Random Forest (ranger)")
+```
+
+
+## . Code Chunk — Summary Table
+
+
+Interpretation
+	•	AUC ≈ 0.73 → robust performance for a tabular, imbalanced dataset.
+	•	Much stronger than the Decision Tree (AUC ≈ 0.59).
+	•	Slightly below Gradient Boosting models, which you’ll test next.
+	•	Shows stable generalization — reliable, interpretable, and solid baseline before boosting.
+
+```{r}
+## ---- model3-rf-summary-box ----
+library(knitr)
+
+rf_summary <- data.frame(
+  Metric = c("Cross-validated AUC", "Validation AUC", "Best mtry / min.node.size", "Trees"),
+  Value  = c(sprintf("≈ %.3f", max(m_rf$results$ROC)),
+             sprintf("≈ %.3f", as.numeric(auc_rf)),
+             paste0(m_rf$bestTune$mtry, " / ", m_rf$bestTune$min.node.size),
+             "500"),
+  Interpretation = c(
+    "Stronger than single tree and often above penalized logistic.",
+    "Checks generalization on unseen data.",
+    "Controls feature subsampling and leaf size for bias-variance tradeoff.",
+    "Ensemble size; larger can improve stability at higher cost."
+  )
+)
+
+kable(rf_summary, align = "lcl",
+      caption = "Model 3 — Random Forest (ranger) Performance Summary")
+
+```
+
+
+## . Random Forest Matrics
+
+Evaluates Random Forest predictions. Summarizes Accuracy, Precision, Recall, F1 at both thresholds. Typically stronger than CART and near glmnet.
+
+```{r}
+## ---- model3-rf-metrics ----
+res3 <- eval_probs(pred_rf, val$target, thresh = 0.50)
+print_metrics("Model 3: Random Forest (ranger)", res3)
+res3$fixed$table; res3$optimal$table
+```
+
+
+
+# . Model 4 — Gradient Boosting (XGBoost)
+
+
+## . Code Chunk — Train XGBoost
+
+Fits a weighted XGBoost classifier with 5-fold CV. Tunes depth, learning rate, rounds, gamma, and child weight. Handles class imbalance via sample weights. Evaluates on the validation set with ROC AUC. 
+
+```{r}
+## ---- model4-xgb-train ----
+library(caret); library(xgboost); library(doParallel)
+
+# parallel
+cl <- makeCluster(parallel::detectCores() - 1); registerDoParallel(cl)
+
+# class weights (inverse frequency)
+tbl <- table(trn$target)
+w_map <- c("Default" = as.numeric(tbl["Repaid"])/sum(tbl),
+          "Repaid"  = as.numeric(tbl["Default"])/sum(tbl))
+trn_wts <- w_map[trn$target]
+
+# CV setup
+ctrl_xgb <- trainControl(method = "cv", number = 5,
+                         classProbs = TRUE,
+                         summaryFunction = twoClassSummary,
+                         savePredictions = "final")
+
+# modest tuning grid
+tgrid <- expand.grid(
+  nrounds = c(200, 400),
+  max_depth = c(3, 6),
+  eta = c(0.05, 0.10),
+  gamma = c(0, 1),
+  colsample_bytree = c(0.7),
+  min_child_weight = c(1, 5),
+  subsample = c(0.8)
+)
+
+set.seed(123)
+m_xgb <- caret::train(
+  target ~ ., data = trn,
+  method = "xgbTree",
+  trControl = ctrl_xgb,
+  metric = "ROC",
+  tuneGrid = tgrid,
+  weights = trn_wts,
+  verbose = FALSE
+)
+
+stopCluster(cl); registerDoSEQ()
+
+m_xgb
+plot(m_xgb)
+```
+
+
+
+
+## . Code Chunk — Validate XGBoost
+
+Computes validation AUC and plots ROC.
+
+
+output:-
+
+Interpretation
+	•	XGBoost achieved AUC ≈ 0.754, the best so far.
+	•	The improvement over Random Forest (≈ 0.73) indicates effective gradient boosting.
+	•	Depth = 6 and η = 0.05 yield a good bias–variance balance.
+	
+	XGBoost currently leads your experiment set (AUC ≈ 0.75).
+Random Forest and Penalized Logistic serve as strong baselines; XGBoost improves recall–precision balance while keeping model variance low.
+
+
+
+```{r}
+## ---- model4-xgb-validate ----
+library(pROC)
+
+pred_xgb <- predict(m_xgb, newdata = val, type = "prob")[, "Default"]
+roc_xgb  <- roc(response = val$target, predictor = pred_xgb, levels = c("Repaid","Default"))
+auc_xgb  <- auc(roc_xgb)
+auc_xgb
+plot(roc_xgb, col = "firebrick", main = "ROC — Model 4: Gradient Boosting (XGBoost)")
+```
+
+
+
+## .Code Chunk — Summary Table
+
+
+```{r}
+## ---- model4-xgb-summary ----
+library(knitr)
+
+xgb_summary <- data.frame(
+  Metric = c("Cross-validated AUC", "Validation AUC",
+             "Best depth / rounds / eta", "Subsample / Colsample"),
+  Value  = c(sprintf("≈ %.3f", max(m_xgb$results$ROC)),
+             sprintf("≈ %.3f", as.numeric(auc_xgb)),
+             paste0(m_xgb$bestTune$max_depth, " / ",
+                    m_xgb$bestTune$nrounds, " / ",
+                    m_xgb$bestTune$eta),
+             paste0(m_xgb$bestTune$subsample, " / ",
+                    m_xgb$bestTune$colsample_bytree)),
+  Interpretation = c(
+    "Usually highest among tree models.",
+    "Generalization on holdout.",
+    "Controls complexity, iterations, learning rate.",
+    "Random row/feature sampling to reduce overfit."
+  )
+)
+
+kable(xgb_summary, align = "lcl",
+      caption = "Model 4 — Gradient Boosting (XGBoost) Performance Summary")
+```
+
+
+## . xgb-metrics
+
+
+Evaluates XGBoost predictions. Reports best overall AUC and operational metrics at fixed and Youden thresholds.
+
+```{r}
+## ---- model4-xgb-metrics ----
+res4 <- eval_probs(pred_xgb, val$target, thresh = 0.50)
+print_metrics("Model 4: Gradient Boosting (XGBoost)", res4)
+res4$fixed$table; res4$optimal$table
+```
+
+
+
+
+```{r, kaggle_xgb_submission, message=FALSE, warning=FALSE}
+
+library(data.table)
+library(janitor)
+library(dplyr)
+library(recipes)
+library(caret)
+
+#------------------------------------------------------------
+# 1. Load saved preprocessing recipe and XGBoost model
+#------------------------------------------------------------
+rec_prep <- readRDS("rec_prepared.rds")     # your saved recipe
+m_xgb    <- m_xgb                           # caret XGBoost model already trained
+
+cat("Loaded recipe and XGBoost model.\n")
+
+#------------------------------------------------------------
+# 2. Load Kaggle test dataset
+#------------------------------------------------------------
+app_test <- fread("application_test.csv") |>
+  clean_names()
+
+cat("Test rows:", nrow(app_test), "\n")
+
+#------------------------------------------------------------
+# 3. Apply SAME basic cleaning as training
+#------------------------------------------------------------
+app_test <- app_test |>
+  mutate(
+    days_employed = na_if(days_employed, 365243),
+    age_years = -days_birth / 365.25,
+    emp_years = if_else(!is.na(days_employed),
+                        -days_employed / 365.25,
+                        NA_real_)
+  )
+
+#------------------------------------------------------------
+# 4. Bake test data through the prepared recipe
+#------------------------------------------------------------
+test_baked <- bake(rec_prep, new_data = app_test)
+
+stopifnot("sk_id_curr" %in% names(test_baked))
+
+test_ids   <- test_baked$sk_id_curr
+test_input <- test_baked |> select(-sk_id_curr)
+
+cat("Baked test dim:", nrow(test_input), ncol(test_input), "\n")
+
+#------------------------------------------------------------
+# 5. Predict using best XGBoost model from caret (m_xgb)
+#------------------------------------------------------------
+test_probs <- predict(m_xgb,
+                      newdata = test_input,
+                      type   = "prob")[, "Default"]
+
+summary(test_probs)
+
+#------------------------------------------------------------
+# 6. Build final Kaggle submission file
+#------------------------------------------------------------
+submission <- data.frame(
+  SK_ID_CURR = test_ids,
+  TARGET     = test_probs
+)
+
+fwrite(submission, "submission_xgb.csv")
+
+cat("Saved submission_xgb.csv with", nrow(submission), "rows.\n")
+```
+
+
+
+
+#. Experiment Proposal
+
+*Objective*
+
+The purpose of this experiment is to design, train, and evaluate multiple machine learning models to predict the probability that a loan applicant will default on repayment.
+By comparing several modeling approaches and evaluation metrics, the goal is to identify the most accurate and reliable model for credit risk assessment in the Home Credit Default Risk dataset.
+
+*Research Question*
+
+Can advanced machine learning models such as Random Forest and Gradient Boosting (XGBoost) outperform baseline statistical models (e.g., Logistic Regression) in predicting loan defaults, while maintaining interpretability and robustness?
+
+*Experimental Design*
+
+	1.	*Dataset and Inputs*
+	
+	•	Source: Home Credit Default Risk dataset (application_train.csv).
+	•	Total observations (after cleaning): ~307,000 clients.
+	•	Target variable: TARGET — binary (0 = Repaid, 1 = Default).
+	•	Predictors: Financial, demographic, and credit history features derived from applicant data.
+	
+	2.	*Data Preparation*
+	
+	•	Cleaned and normalized features using recipes pipeline.
+	•	Removed high-NA and zero-variance predictors.
+	•	Handled imbalance via class weights (and later threshold-based evaluation).
+	•	Derived engineered variables such as AGE_YEARS, EMP_YEARS, and log-scaled financial ratios.
+	
+	3.	*Experimental Methodology*
+	
+	•	Partitioning: 70% training / 30% validation, stratified by target variable.
+	•	Cross-Validation: 5-fold CV for parameter tuning and model stability.
+	•	Benchmark: Majority-class classifier predicting all as “Repaid” (Accuracy ≈ 0.919, AUC = 0.5).
+	•	Models Tested:
+	•	Model 1 — Penalized Logistic Regression (glmnet)
+	•	Model 2 — Decision Tree (CART)
+	•	Model 3 — Random Forest (ranger)
+	•	Model 4 — Gradient Boosting (XGBoost)
+	
+	4.	*Evaluation Metrics*
+	
+	•	Primary metric: AUC (Area Under the ROC Curve).
+	•	Secondary metrics: Accuracy, Precision, Recall, Specificity, and F1 Score.
+	•	Diagnostics: Confusion matrices at fixed (0.50) and optimal (Youden) thresholds.
+	•	Performance Goal: Achieve AUC > 0.70 and improved recall over the baseline model.
+	
+	5.	*Expected Outcomes*
+	
+	•	Determine the model with the best discrimination between repaid and defaulted loans.
+	•	Quantify trade-offs between precision and recall for credit risk decisions.
+	•	Validate that boosting methods (especially XGBoost) deliver the best overall balance between predictive power and generalization.
+
+*Significance*
+
+Accurately predicting default risk will help Home Credit improve lending decisions, reduce financial losses, and extend fair credit access to low-history borrowers.
+The experiment also provides practical experience in end-to-end machine learning model development, imbalanced classification, and performance evaluation using real-world financial data.
+
+
+
+
