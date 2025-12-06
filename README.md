@@ -110,6 +110,8 @@ This team-level solution provided the shared foundation for the final presentati
 
 The XGBoost model provided the strongest generalization and ranking capability.
 
+![](/Images/Picture1.png)
+
 ### **2.7 Kaggle Submission Workflow**
 The final prediction pipeline:
 
@@ -120,6 +122,8 @@ The final prediction pipeline:
 
 After uploading the submission, the model achieved a **public leaderboard AUC score of 0.74203**, which closely matches the validation performance of the XGBoost model.  
 A screenshot of the Kaggle score (`kaggle_score_screenshot.png`) is included in the repository for reference.  
+
+![](/Images/kaggle_score_screenshot.png)
 
 ---
 
