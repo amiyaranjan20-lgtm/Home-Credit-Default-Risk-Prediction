@@ -193,6 +193,7 @@ The final XGBoost model achieved a validation AUC of approximately **0.75**, whi
 - Consistency between validation AUC and Kaggle score indicates that the model generalizes well and is not overfitting.
 
 ### What These Results Tell Us
+
 1. **Default risk is predictable**  
    Key engineered features (income ratios, age, employment duration, external scores) show measurable separation between high-risk and low-risk groups.
 
@@ -228,9 +229,11 @@ Together, the results confirm that machine learning–based risk scoring is an e
 - **`submission_xgb.csv`**  
   Kaggle submission file generated from the final XGBoost model.
 
-
 - **`Home Credit Default Risk.pdf`** 
   The presentation used to summarize the business problem, modeling approach, and key insights from the project.
 
 - **`kaggle_score_screenshot.png`**  
   Screenshot of the Kaggle Public Leaderboard score for the submitted XGBoost model.
+
+- **`/Images/` folder**  
+  Contains all Exploratory Data Analysis (EDA) visuals used to understand data structure, distribution patterns, correlations, missingness, and early signals that informed preprocessing and modeling decisions.
