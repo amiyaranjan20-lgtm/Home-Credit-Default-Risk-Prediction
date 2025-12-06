@@ -143,10 +143,6 @@ The experience reflects a complete end-to-end machine learning workflow, similar
 - **`Home_Credit_Default_Risk_Prediction.Rmd`**  
   Full notebook containing data cleaning, feature engineering, model development, evaluation, and the final submission workflow.
 
-- **`rec_prepared.rds`**  
-  Saved preprocessing recipe created using the `recipes` package.  
-  This ensures identical transformations are applied to both training and test datasets.
-
 - **`submission_xgb.csv`**  
   Kaggle submission file generated from the final XGBoost model.
 
