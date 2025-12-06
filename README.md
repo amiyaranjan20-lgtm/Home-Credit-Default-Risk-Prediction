@@ -49,7 +49,7 @@ Before model building, I performed an exploratory analysis to understand the str
 
 The EDA phase provided the foundation for informed preprocessing decisions and helped shape the modeling strategy, especially around handling missingness, class imbalance, and nonlinear feature behavior.
 
-![]([Images/Visual Interpretation of taget variable-1.png](https://github.com/amiyaranjan20-lgtm/Home-Credit-Default-Risk-Prediction/blob/main/Images/Visual%20Interpretation%20of%20taget%20variable-1.png))
+![](https://github.com/amiyaranjan20-lgtm/Home-Credit-Default-Risk-Prediction/blob/main/Images/Visual%20Interpretation%20of%20taget%20variable-1.png)
 
 
 ### **2.3 Preprocessing Pipeline (recipes)**
