@@ -1,5 +1,5 @@
 
-# Home Credit Default Risk – Individual Portfolio (Amiya Ranjan Sahoo)
+# Introduction
 
 Can we use historical loan data to estimate how likely a new applicant is to default, especially when they don’t have a traditional credit history?
 
