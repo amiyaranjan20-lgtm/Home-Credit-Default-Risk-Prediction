@@ -64,9 +64,21 @@ All models were trained using:
 
 - 5-fold cross-validation  
 - ROC/AUC as the main performance metric  
-- Identical preprocessing and evaluation methodology  
+- Identical preprocessing and evaluation methodology
 
-### **2.5 Model Performance**
+### 2.5 Overall Project Solution (Team-Level Summary)
+
+As a team, we aligned on a common goal: build a supervised machine learning system that predicts the probability of loan default for Home Credit applicants. Our collective solution included:
+
+- Using the Kaggle dataset to engineer predictive features related to demographics, employment, and financial behavior.  
+- Establishing a consistent preprocessing framework so all team members’ models trained on comparable, high-quality inputs.  
+- Testing four models — Logistic Regression, Decision Tree, Random Forest, and XGBoost — using identical evaluation criteria (5-fold CV and AUC).  
+- Comparing performance across the models to identify the approach that delivered the best ranking accuracy and stability.  
+- Agreeing that **XGBoost** was the strongest model overall and recommending it as the final risk-scoring solution for the project.
+
+This team-level solution provided the shared foundation for the final presentation and served as the unified answer to the business problem.
+
+### **2.6 Model Performance**
 - CART: AUC ≈ 0.59  
 - Logistic Regression: AUC ≈ 0.74  
 - Random Forest: AUC ≈ 0.73  
@@ -74,12 +86,16 @@ All models were trained using:
 
 The XGBoost model provided the strongest generalization and ranking capability.
 
-### **2.6 Kaggle Submission Workflow**
+### **2.7 Kaggle Submission Workflow**
 The final prediction pipeline:
 
 - Applies the trained recipe to the Kaggle test set  
 - Generates predicted probabilities for each applicant  
-- Produces `submission_xgb.csv` according to Kaggle format  
+- Produces `submission_xgb.csv` according to Kaggle format
+- Submits the file to the Kaggle competition portal for evaluation  
+
+After uploading the submission, the model achieved a **public leaderboard AUC score of 0.74203**, which closely matches the validation performance of the XGBoost model.  
+A screenshot of the Kaggle score (`kaggle_score_screenshot.png`) is included in the repository for reference.  
 
 ---
 
