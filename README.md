@@ -1,4 +1,4 @@
-[Home Credit Default Risk Prediction : Project Overview](https://github.com/amiyaranjan20-lgtm/Home-Credit-Default-Risk-Prediction)
+[Link to Home Credit Default Risk Prediction : Project Overview](https://github.com/amiyaranjan20-lgtm/Home-Credit-Default-Risk-Prediction)
 
 # Introduction
 
