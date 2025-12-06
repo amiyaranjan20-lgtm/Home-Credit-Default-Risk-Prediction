@@ -37,7 +37,22 @@ My analysis follows a structured, reproducible workflow:
 - Created derived, interpretable numeric features such as `age_years` and `emp_years`  
 - Performed a detailed missingness audit and removed high-missing and zero-variance predictors
 
-### **2.2 Preprocessing Pipeline (recipes)**
+### 2.2 Exploratory Data Analysis (EDA)
+
+Before model building, I performed an exploratory analysis to understand the structure, quality, and behavior of the variables in the dataset. This included:
+
+- Reviewing dataset dimensions, variable types, and initial distributions using `skimr`, `summary()`, and `str()`.  
+- Checking class imbalance in the target variable (≈ 8% default, 92% repaid), which influenced the choice of metrics and modeling approach.  
+- Examining missing patterns across features and identifying variables with extremely high missingness, which later guided feature pruning.  
+- Investigating key numerical features such as age, employment duration, income, and credit ratios to detect outliers, skewness, and transformation needs.  
+- Exploring relationships using pair plots, correlations, and simple aggregations to understand which predictors showed early signal for default risk.  
+
+The EDA phase provided the foundation for informed preprocessing decisions and helped shape the modeling strategy, especially around handling missingness, class imbalance, and nonlinear feature behavior.
+
+![]([Images/Visual Interpretation of taget variable-1.png](https://github.com/amiyaranjan20-lgtm/Home-Credit-Default-Risk-Prediction/blob/main/Images/Visual%20Interpretation%20of%20taget%20variable-1.png))
+
+
+### **2.3 Preprocessing Pipeline (recipes)**
 A complete preprocessing system was developed using the `recipes` package, incorporating:
 
 - Median and mode imputation  
