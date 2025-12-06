@@ -182,7 +182,45 @@ The experience reflects a complete end-to-end machine learning workflow, similar
 
 ---
 
-## 7. Repository Contents
+## 7. Interpretation of Results and Key Takeaways
+
+The final XGBoost model achieved a validation AUC of approximately **0.75**, which indicates strong discriminatory power for distinguishing between borrowers who are likely to repay versus those who are likely to default. In credit-risk modeling, any AUC above 0.70 is considered practically useful, and scores in the 0.75 range are commonly used in real underwriting systems.
+
+### How to Interpret These Values
+- **AUC ≈ 0.75** means the model correctly ranks a randomly chosen defaulter above a randomly chosen non-defaulter about 75% of the time.  
+- This is significantly better than the baseline (AUC = 0.50), which cannot differentiate risk at all.  
+- The model captures complex borrower patterns that simple rules or linear scoring systems would miss.  
+- Consistency between validation AUC and Kaggle score indicates that the model generalizes well and is not overfitting.
+
+### What These Results Tell Us
+1. **Default risk is predictable**  
+   Key engineered features (income ratios, age, employment duration, external scores) show measurable separation between high-risk and low-risk groups.
+
+2. **Tree-based models capture financial behavior better**  
+   Logistic regression provides a solid baseline, but nonlinear relationships dominate this dataset.  
+   XGBoost captures these interactions more effectively.
+
+3. **Missingness and skewness directly affect credit-risk modeling**  
+   Addressing anomalies, extreme skew, and high-missing features improved stability and reduced noise in the model.
+
+4. **Imbalanced data must be handled carefully**  
+   With defaults at only ~8%, accuracy alone is misleading.  
+   Shifting focus to AUC, Recall, and thresholding supported more meaningful evaluation.
+
+### How This Justifies the Business Case
+The project results directly support the original business problem:
+
+- **Better identification of risky borrowers** reduces credit losses.  
+- **More confident approvals for low-risk applicants** improves financial inclusion and loan-volume growth.  
+- **Data-driven decision thresholds** (approve / review / decline) align the model with business risk appetite.  
+- **Consistent ranking of applicants** supports underwriting, pricing, and portfolio monitoring.
+
+In practical terms, a model with this level of performance gives Home Credit a reliable early-warning system that can materially reduce default rates while allowing good clients without traditional credit histories to be approved.  
+This aligns with the company’s mission and the operational goals of responsible lending.
+
+Together, the results confirm that machine learning–based risk scoring is an effective solution to the business problem and provides a foundation for further model refinement, monitoring, and eventual deployment.
+
+## 8. Repository Contents
 
 - **`Home_Credit_Default_Risk_Prediction.Rmd`**  
   Full notebook containing data cleaning, feature engineering, model development, evaluation, and the final submission workflow.
